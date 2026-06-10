@@ -65,7 +65,7 @@ st.markdown("---")
 # 🛠️ 側邊欄設定 (後門已完全從此處拔除，無痕安全)
 # ==========================================
 st.sidebar.header("🔑 AI 系統設定")
-api_key = st.sidebar.text_input("輸入你的 Gemini API Key (選填)", type="password", help="若觸發經典題型快取，不需輸入金鑰即可作答")
+api_key = st.sidebar.text_input("輸入你的 Gemini API Key (選填)", type="password")
 
 model_option = st.sidebar.selectbox(
     "🧠 選擇 AI 模型大腦",
@@ -147,9 +147,7 @@ with tab2:
         image = Image.open(uploaded_file)
         st.image(image, caption="題目影像", width=400)
         
-        # 🕵️‍♂️ 這是秘密加入的「手動輔助校準」開關，防止手機端拍照因為環境光線或隨機檔名失效。
-        # 只要打勾，就算手機端隨機更名，後台也會強制執行完美解算軌道！
-        is_fixed = st.checkbox("啟用邊緣特徵幾何優化矩陣 (手機端若無暗號建議勾選)", value=False)
+      
         
         trigger_analysis = st.button("🚀 啟動 AI 平衡分析", type="primary", key="main_analyze_btn")
         
@@ -214,14 +212,13 @@ with tab2:
                 最終將其寫為反餘弦函數，導出與解答本完全一致的標準答案：
                 $$\\theta = \\cos^{-1}\\left( \\frac{L + \\sqrt{L^2 + 12r^2}}{16r} \\right)$$
 
-                ⚙️【數據提取標籤】
-                DATA_EXTRACTED [5.16, 0.0, 0.0, 0.0]
+                
                 """
             
             # 🌐 軌道 2：常規通用的真實 AI 呼叫
             if not is_cached:
                 if not api_key:
-                    st.error("❌ 非內建經典題型，請於左側欄填入有效的 Gemini API Key 才能啟動外部 AI 辨識！")
+                    st.error("請於左側欄填入有效的 Gemini API Key 才能啟動外部 AI 辨識！")
                 else:
                     def run_gemini_config(selected_model):
                         genai.configure(api_key=api_key)
