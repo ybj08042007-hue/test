@@ -2,3 +2,4 @@ streamlit
 google-generativeai
 sympy
 Pillow
+genai
