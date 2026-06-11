@@ -106,7 +106,7 @@ if uploaded_file is not None and API_KEY:
     if st.button("讓 AI 辨識題目參數"):
         with st.spinner("AI 正在解析圖像..."):
             
-        model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             
             prompt = """
             你是一個靜力學專家。請分析這張圖片中的剛體平衡題目（主要為水平樑結構）。
