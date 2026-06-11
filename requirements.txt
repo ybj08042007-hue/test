@@ -1,4 +1,4 @@
 streamlit
-numpy
-Pillow
 google-generativeai
+sympy
+Pillow
