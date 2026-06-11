@@ -1,171 +1,116 @@
-import streamlit as st
-import google.generativeai as genai
-import sympy as sp
-import json
+import os
+import re
+import time
+import getpass
+from google import genai
+from google.genai import types
 from PIL import Image
+from google.colab import files
+from IPython.display import display, Markdown
 
-# ==========================================
-# 1. 初始化與 API 設定
-# ==========================================
-st.set_page_config(page_title="靜力學自由體圖 AI 解題器", layout="wide")
-st.title("🏗️ 靜力學自由體圖解題器 (AI 視覺 + SymPy 運算)")
-st.markdown("上傳題目圖片，AI 將辨識參數，您可以微調後交由程式計算出**絕對正確**的答案。")
+def clean_ai_output(text):
+    text = re.sub(r'&nbsp;', ' ', text)
+    text = re.sub(r'<br\s*/?>', '\n', text)
+    text = re.sub(r'\xa0', ' ', text)
+    text = re.sub(r'​', '', text)
+    text = text.replace('$$ ', '$$\n').replace(' $$', '\n$$')
+    return text
 
-# 請在 Streamlit Secrets 或環境變數中設定您的 API Key
-API_KEY = st.text_input("請輸入您的 Google Gemini API Key:", type="password")
-if API_KEY:
-    genai.configure(api_key=API_KEY)
+def analyze_mechanics_image_v6():
+    display(Markdown("## 📸 工程力學圖片辨識自動解題器 (終極雙保險抗塞車版)"))
+    display(Markdown("---"))
 
-# ==========================================
-# 2. 定義計算引擎 (SymPy 剛體平衡)
-# ==========================================
-def solve_statics(data):
+    # 1. 上傳圖片
+    display(Markdown("### 📥 步驟 1：請上傳你的題目圖片"))
+    uploaded = files.upload()
+
+    if not uploaded:
+        print("未上傳任何檔案。")
+        return
+
+    img_path = list(uploaded.keys())[0]
+    img = Image.open(img_path)
+
+    display(Markdown("**已成功讀取圖片：**"))
+    img.thumbnail((400, 400))
+    display(img)
+
+    # 2. 設定 API Key (改為手動安全輸入)
+    display(Markdown("### 🔑 步驟 2：請輸入你的 Gemini API Key"))
+    MY_API_KEY = getpass.getpass("請貼上你的 API Key (輸入時不會顯示畫面，貼上後按 Enter 即可): ")
+
+    if not MY_API_KEY.strip():
+        print("❌ 錯誤：API Key 不能為空，請重新執行程式！")
+        return
+
+    client = genai.Client(api_key=MY_API_KEY.strip())
+
+    prompt = """
+    你是一位精通大一工程力學（靜力學）的教授。
+    請仔細辨識這張圖片中的題目內容、自由體圖（FBD）、已知的力、距離與支承形式。
+    請依據剛體平衡的原理，提供繁體中文的詳細解題步驟。
+
+    【格式限制（極度重要）】：
+    1. 嚴禁輸出任何 HTML 標籤（例如 &nbsp;, <br> 等）。
+    2. 請使用標準的 LaTeX 格式來表達變數與公式，例如：$A_x$, $B_x$, $B_y$。
+    3. 獨立公式請用 $$ 換行包覆，例如：
+        $$\\sum F_x = A_x + B_x = 0$$
+
+    請包含以下內容：
+    1. 【題目文字辨識】
+    2. 【建立座標系與符號定義】
+    3. 【列出平衡方程式】
+    4. 【聯立求解過程】
+    5. 【最終答案與方向說明】
     """
-    接收結構化數據，使用 SymPy 解開 2D 剛體平衡方程式
-    """
-    # 建立未知數清單與方程式清單
-    unknowns = []
-    Fx_eq = 0
-    Fy_eq = 0
-    Moment_eq = 0  # 以原點 x=0 為力矩中心
-    
-    results_log = []
 
-    try:
-        # 處理外加點載重 (Point Loads)
-        for load in data.get("point_loads", []):
-            mag = load["magnitude"] # 假設向下為負
-            x = load["x"]
-            Fy_eq -= mag
-            Moment_eq -= mag * x
-            results_log.append(f"加入點載重: {mag} N 在 x={x} m")
+    display(Markdown("---"))
 
-        # 處理均佈載重 (Distributed Loads) - 簡化為矩形或三角形處理
-        for d_load in data.get("distributed_loads", []):
-            w1, w2 = d_load["start_mag"], d_load["end_mag"]
-            x1, x2 = d_load["start_x"], d_load["end_x"]
-            length = x2 - x1
-            
-            # 拆解為矩形與三角形載重
-            # 矩形部分
-            rect_force = min(w1, w2) * length
-            rect_x = x1 + length / 2
-            Fy_eq -= rect_force
-            Moment_eq -= rect_force * rect_x
-            
-            # 三角形部分 (假設 w1 > w2)
-            if w1 != w2:
-                tri_force = abs(w1 - w2) * length / 2
-                # 重心位置取決於哪邊比較高
-                tri_x = x1 + length / 3 if w1 > w2 else x1 + (2 * length) / 3
-                Fy_eq -= tri_force
-                Moment_eq -= tri_force * tri_x
-                
-            results_log.append(f"加入均佈載重: {w1} 到 {w2} N/m，區間 {x1}m~{x2}m")
+    full_img = Image.open(img_path)
 
-        # 處理支承反力 (Supports)
-        for support in data.get("supports", []):
-            name = support["name"]
-            stype = support["type"]
-            x = support["x"]
-            
-            if stype == "roller" or stype == "滾子":
-                Ry = sp.Symbol(f"{name}_y")
-                unknowns.append(Ry)
-                Fy_eq += Ry
-                Moment_eq += Ry * x
-                results_log.append(f"建立滾子支承 {name}: 未知數 {Ry}")
-                
-            elif stype == "pin" or stype == "插銷":
-                Rx = sp.Symbol(f"{name}_x")
-                Ry = sp.Symbol(f"{name}_y")
-                unknowns.extend([Rx, Ry])
-                Fx_eq += Rx
-                Fy_eq += Ry
-                Moment_eq += Ry * x
-                results_log.append(f"建立插銷支承 {name}: 未知數 {Rx}, {Ry}")
+    # 定義備用模型清單
+    models_to_try = ['gemini-3-flash-preview', 'gemini-2.5-flash']
+    success = False
 
-        # 解方程式
-        equations = [sp.Eq(Fx_eq, 0), sp.Eq(Fy_eq, 0), sp.Eq(Moment_eq, 0)]
-        solution = sp.linsolve(equations, unknowns)
-        
-        return solution, unknowns, results_log, equations
-        
-    except Exception as e:
-        return None, None, [f"計算發生錯誤: {str(e)}"], None
+    for model_name in models_to_try:
+        if success:
+            break
 
-# ==========================================
-# 3. AI 圖像辨識與 UI 流程
-# ==========================================
-uploaded_file = st.file_uploader("上傳靜力學題目 (JPG/PNG)", type=["jpg", "png", "jpeg"])
+        display(Markdown(f"### 🤖 嘗試使用模型：`{model_name}` 進行解題..."))
 
-if uploaded_file is not None and API_KEY:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="上傳的題目", use_column_width=True)
+        max_retries = 2
+        retry_delay = 10  # 遇到 503 多等幾秒，給伺服器喘息時間
 
-    if st.button("讓 AI 辨識題目參數"):
-        with st.spinner("AI 正在解析圖像..."):
-            
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            
-            prompt = """
-            你是一個靜力學專家。請分析這張圖片中的剛體平衡題目（主要為水平樑結構）。
-            請將圖片中的資訊提取出來，並**嚴格**以 JSON 格式輸出，不要包含任何其他文字。
-            
-            JSON 結構範例：
-            {
-              "supports": [
-                {"name": "A", "type": "roller", "x": 0},
-                {"name": "B", "type": "pin", "x": 6}
-              ],
-              "point_loads": [
-                {"magnitude": 5000, "x": 2}
-              ],
-              "distributed_loads": [
-                {"start_mag": 900, "end_mag": 600, "start_x": 0, "end_x": 6}
-              ]
-            }
-            備註：長度單位預設為 m，力量預設為 N。起點 x=0 設定在樑的最左端。
-            """
-            
+        for attempt in range(max_retries):
             try:
-                response = model.generate_content([prompt, image])
-                # 清理 AI 可能產生的 Markdown 標籤
-                json_str = response.text.replace("```json", "").replace("```", "").strip()
-                extracted_data = json.loads(json_str)
-                st.session_state['extracted_data'] = extracted_data
-                st.success("辨識完成！請在下方確認參數是否正確。")
-            except Exception as e:
-                st.error(f"AI 解析失敗，請手動輸入。錯誤訊息：{e}")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[full_img, prompt]
+                )
 
-    # 若有提取資料，讓使用者透過 UI 進行最終確認 (Human-in-the-Loop)
-    if 'extracted_data' in st.session_state:
-        st.subheader("⚙️ 參數確認與微調 (AI 難免出錯，請確認後再計算)")
-        
-        # 使用 Streamlit 原生輸入框讓使用者修改 JSON
-        edited_json = st.text_area("編輯 JSON 參數 (確認數字與圖片相符)", 
-                                   value=json.dumps(st.session_state['extracted_data'], indent=4, ensure_ascii=False),
-                                   height=300)
-        
-        if st.button("開始計算支承反力"):
-            final_data = json.loads(edited_json)
-            solution, unknowns, logs, equations = solve_statics(final_data)
-            
-            st.divider()
-            st.subheader("🧮 計算結果")
-            
-            for log in logs:
-                st.text(log)
-                
-            st.markdown("### 平衡方程式：")
-            st.latex(f"\\sum F_x = 0 \\Rightarrow {sp.latex(equations[0].lhs)} = 0")
-            st.latex(f"\\sum F_y = 0 \\Rightarrow {sp.latex(equations[1].lhs)} = 0")
-            st.latex(f"\\sum M_O = 0 \\Rightarrow {sp.latex(equations[2].lhs)} = 0")
-            
-            st.markdown("### 最終解答：")
-            if solution:
-                sol_list = list(solution)[0]
-                for var, val in zip(unknowns, sol_list):
-                    st.success(f"**{var} = {val:.2f} (向右/向上為正)**")
-            else:
-                st.error("方程式無法求解，請檢查輸入參數的自由度是否足夠。")
+                cleaned_text = clean_ai_output(response.text)
+                display(Markdown("### 🎉 【自動解題結果】"))
+                display(Markdown(cleaned_text))
+                success = True
+                break  # 成功就跳出重試迴圈
+
+            except Exception as e:
+                error_msg = str(e)
+                # 如果是 503 擁擠或 429 額度問題
+                if "503" in error_msg or "UNAVAILABLE" in error_msg or "429" in error_msg:
+                    print(f" ⚠️ {model_name} 伺服器忙碌中 (嘗試第 {attempt + 1}/{max_retries} 次)... 將在 {retry_delay} 秒後重試。")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                else:
+                    print(f"發生其他錯誤: {e}")
+                    break
+
+        if not success:
+            print(f"❌ {model_name} 嘗試失敗，準備切換下一個備援模型...\n")
+
+    if not success:
+        display(Markdown("### 😭 所有模型目前皆處於高負載狀態"))
+        display(Markdown("> **建議解法**：請等待大約 1 到 2 分鐘，直接再次點擊 Colab 的執行按鈕重新跑一次即可！"))
+
+# 執行終極版程式
+analyze_mechanics_image_v6()
